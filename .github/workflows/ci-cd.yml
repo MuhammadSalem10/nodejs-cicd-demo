@@ -1,0 +1,153 @@
+# -----------------------------------------------------------------------------
+# Workflow Name: CI/CD Pipeline for Node.js App
+#
+# Description:
+# This workflow automates the process of building, testing, and deploying a
+# Node.js application. It is triggered on pushes and pull requests to the
+# 'main' branch.
+#
+#   - The 'build-and-test' job runs for every push and PR to 'main'. It installs
+#     dependencies, runs tests, and builds the application.
+#   - The 'deploy' job runs *only* after a successful 'build-and-test' on a
+#     push to the 'main' branch, deploying the build artifacts to GitHub Pages.
+# -----------------------------------------------------------------------------
+
+name: CI/CD Pipeline for Node.js App
+
+# -----------------------------------------------------------------------------
+# Triggers: Controls when the workflow will run
+# -----------------------------------------------------------------------------
+on:
+  # Run this workflow on push events for the 'main' branch
+  push:
+    branches: [ "main" ]
+
+  # Run this workflow on pull request events targeting the 'main' branch
+  pull_request:
+    branches: [ "main" ]
+
+# -----------------------------------------------------------------------------
+# Permissions: Defines the permissions granted to the GITHUB_TOKEN
+#
+# This is a security best practice. We grant write permissions for 'contents'
+# to allow the 'deploy' job to push to the 'gh-pages' branch.
+# All other permissions are restricted to 'read'.
+# -----------------------------------------------------------------------------
+permissions:
+  contents: write
+
+# -----------------------------------------------------------------------------
+# Jobs: A workflow run is made up of one or more jobs
+# -----------------------------------------------------------------------------
+jobs:
+  # ---------------------------------------------------------------------------
+  # Job 1: build-and-test
+  #
+  # This job handles the Continuous Integration (CI) part. It builds the
+  # application and runs tests to ensure code quality and correctness.
+  # ---------------------------------------------------------------------------
+  build-and-test:
+    # The type of virtual machine to run the job on
+    runs-on: ubuntu-latest
+
+    steps:
+      # Step 1: Checkout the repository code
+      # This action checks out your repository under $GITHUB_WORKSPACE,
+      # so your job can access it.
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Step 2: Set up Node.js environment
+      # This action installs a specific version of Node.js for use in our workflow.
+      - name: Set up Node.js v18.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18.x'
+
+      # Step 3: Cache npm dependencies
+      # This step speeds up the build process by caching the node_modules
+      # directory. The cache is invalidated and recreated whenever the
+      # package-lock.json file changes.
+      - name: Cache Node.js modules
+        uses: actions/cache@v4
+        with:
+          # The directory to cache
+          path: ~/.npm
+          # The cache key. We use the OS, Node version, and a hash of the
+          # lockfile to create a unique key. If the lockfile changes,
+          # the hash changes, and a new cache is created.
+          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+          # A fallback key to use if the primary key doesn't have a match
+          restore-keys: |
+            ${{ runner.os }}-node-
+
+      # Step 4: Install dependencies
+      # 'npm ci' is often preferred in CI environments over 'npm install'
+      # because it provides faster, more reliable builds by using the
+      # package-lock.json file.
+      - name: Install dependencies
+        run: npm ci
+
+      # Step 5: Run unit tests
+      # Executes the test suite to validate the code. If tests fail,
+      # the workflow will stop here.
+      - name: Run unit tests
+        run: npm test
+
+      # Step 6: Build the application
+      # Runs the build script (defined in package.json) to create a
+      # production-ready build in the 'build' directory.
+      - name: Build the application
+        run: npm run build
+
+      # Step 7: Upload build artifacts
+      # This action packages the 'build' directory and uploads it as an artifact
+      # named 'production-files'. This allows other jobs in the workflow
+      # to download and use the build output.
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-files
+          path: ./build
+
+  # ---------------------------------------------------------------------------
+  # Job 2: deploy
+  #
+  # This job handles the Continuous Deployment (CD) part. It deploys the
+  # application to GitHub Pages but only runs on a successful push to 'main'.
+  # ---------------------------------------------------------------------------
+  deploy:
+    # This job will only run if the 'build-and-test' job completes successfully.
+    needs: build-and-test
+
+    # Condition: This job will only run for 'push' events on the 'main' branch.
+    # It will be skipped for pull requests and pushes to other branches.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    # The type of virtual machine to run the job on
+    runs-on: ubuntu-latest
+
+    steps:
+      # Step 1: Download build artifacts
+      # This action downloads the 'production-files' artifact that was
+      # uploaded by the 'build-and-test' job. The files are extracted
+      # into the current directory.
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: production-files
+          # The artifact will be downloaded into a directory named 'build'
+          path: ./build
+
+      # Step 2: Deploy to GitHub Pages
+      # This community action handles all the git commands needed to push
+      # the contents of the './build' directory to the 'gh-pages' branch.
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          # The GITHUB_TOKEN is a special access token that GitHub Actions
+          # provides. It's used here to grant the action permission to
+          # push to your repository.
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          # The directory that contains the files to be deployed.
+          publish_dir: ./build
